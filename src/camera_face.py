@@ -1,3 +1,4 @@
+#!/opt/anaconda3/envs/facenet_mask/bin/python
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -13,45 +14,50 @@ import facenet
 import align.detect_face
 import sqlite3
 import cv2
+    
+minsize = 20 # minimum size of face
+threshold = [ 0.6, 0.7, 0.7 ]  # three steps's threshold
+factor = 0.709 # scale factor
 
 cap = cv2.VideoCapture(0)
 
 def main(args):
+    with tf.Graph().as_default():
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
+        with tf.Session() as sess:
+            pnet, rnet, onet = align.detect_face.create_mtcnn(sess, None)
 
-    while True:
-        tick = cv2.getTickCount()
+            # Load the model
+            facenet.load_model(args.model)
 
-        ret, frame = cap.read()
-        try:
-            images = load_and_align_data(frame, args.image_size, args.margin, args.gpu_memory_fraction)
-        except:
-            continue
-        with tf.Graph().as_default():
+            # Get input and output tensors
+            images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
+            embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
+            phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
 
-            with tf.Session() as sess:
+            while True:
+                tick = cv2.getTickCount()
+                ret, frame = cap.read()
 
-                # Load the model
-                facenet.load_model(args.model)
-
-                # Get input and output tensors
-                images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
-                embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
-                phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
-
+                try:
+                    images = load_and_align_data(frame, args.image_size, args.margin, pnet, rnet, onet)
+                except:
+                    continue
                 # Run forward pass to calculate embeddings
                 feed_dict = { images_placeholder: images, phase_train_placeholder:False }
                 emb = sess.run(embeddings, feed_dict=feed_dict)
-
+                
                 detect_name = detect_f(emb)
-                print(detect_name)
-        fps = cv2.getTickFrequency() / (cv2.getTickCount() - tick)
-        cv2.putText(frame, "FPS:{} ".format(int(fps)),
-            (10, 50), cv2.FONT_HERSHEY_PLAIN, 3, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(frame,detect_name,
-            (10, 90), cv2.FONT_HERSHEY_PLAIN, 3, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.imshow('cap', frame)
-        if cv2.waitKey(1) == ord('q'):
-            break
+
+                fps = cv2.getTickFrequency() / (cv2.getTickCount() - tick)
+                cv2.putText(frame, "FPS:{} ".format(int(fps)),
+                            (10, 50), cv2.FONT_HERSHEY_PLAIN, 3, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(frame,detect_name,
+                            (10, 90), cv2.FONT_HERSHEY_PLAIN, 3, (255, 255, 255), 2, cv2.LINE_AA)
+                cv2.imshow('cap', frame)
+                if cv2.waitKey(1) == ord('q'):
+                    break
 
 def detect_f(emb):
     dbname = 'register.db'
@@ -70,18 +76,7 @@ def detect_f(emb):
     conn.close()
     return 'unknown'
             
-def load_and_align_data(frame, image_size, margin, gpu_memory_fraction):
-
-    minsize = 20 # minimum size of face
-    threshold = [ 0.6, 0.7, 0.7 ]  # three steps's threshold
-    factor = 0.709 # scale factor
-    
-    with tf.Graph().as_default():
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory_fraction)
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
-        with sess.as_default():
-            pnet, rnet, onet = align.detect_face.create_mtcnn(sess, None)
-
+def load_and_align_data(frame, image_size, margin, pnet, rnet, onet):
     img_list = []
     #img = misc.imread(os.path.expanduser(file_path), mode='RGB')
     img = frame
